@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<!--
+  HÔM NAY ĂN GÌ? — Tra cứu & Random Món ăn
+  Một file duy nhất: HTML + Tailwind CSS (CDN) + JavaScript thuần.
+
+  Cách chạy: mở file này bằng Chrome/Edge (cần có mạng để tải Tailwind).
+  Dữ liệu lưu trong localStorage của trình duyệt (khóa: hom-nay-an-gi:v1).
+
+  Cấu trúc <script>:
+    1. Dữ liệu: CATS, SEED (24 món mẫu), load()/save()
+    2. Render: renderChips, renderGrid
+    3. Âm thanh (Web Audio) + hiệu ứng (confetti, toast)
+    4. Random: spin() -> finish()
+    5. Sự kiện chung
+    6. Quản lý món: thêm / sửa / xóa + hoàn tác / khôi phục mẫu
+-->
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hôm nay ăn gì?</title>
+<script>
+  /* Áp dụng giao diện sáng/tối ngay từ đầu để tránh bị nháy màu */
+  try {
+    var t = localStorage.getItem("hom-nay-an-gi:theme");
+    if (t === "dark" || (!t && matchMedia("(prefers-color-scheme: dark)").matches)) document.documentElement.classList.add("dark");
+  } catch (e) {}
+</script>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<style>
+  :root { color-scheme: light; box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+  body { background: #FFF7ED; color: #292524; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .breathe { animation: breathe 1.8s ease-in-out infinite; }
+  @keyframes breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+  .spinning .reel-emoji { filter: blur(2px); transform: scale(.92); }
+  .reel-emoji { transition: transform .08s, filter .08s; }
+  .pop { animation: pop .5s cubic-bezier(.2,1.6,.4,1); }
+  @keyframes pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .confetti { position: fixed; top: -20px; z-index: 50; pointer-events: none; animation: fall 1.8s ease-in forwards; }
+  @keyframes fall { to { transform: translateY(110vh) rotate(720deg); opacity: .8; } }
+  .card-in { animation: cardIn .3s ease both; }
+  @keyframes cardIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .flash { animation: flash 1.2s ease 2; }
+  @keyframes flash { 50% { box-shadow: 0 0 0 4px #FBBF24; } }
+  .chips::-webkit-scrollbar { display: none; }
+
+  /* ===== Chế độ tối ===== */
+  html.dark { color-scheme: dark; }
+  .dark body { background: #1c1917; color: #e7e5e4; }
+  .dark .bg-white { background-color: #292524; }
+  .dark .bg-white\/90 { background-color: rgba(41,37,36,.92); }
+  .dark .bg-stone-100 { background-color: #44403c; }
+  .dark .bg-stone-800 { background-color: #57534e; }
+  .dark .bg-orange-50 { background-color: #3b2a1d; }
+  .dark .bg-orange-100 { background-color: #4a3320; }
+  .dark .hover\:bg-orange-100:hover { background-color: #5a3d26; }
+  .dark .bg-emerald-50 { background-color: #12372b; }
+  .dark .hover\:bg-emerald-100:hover { background-color: #17493a; }
+  .dark .bg-red-50 { background-color: #3f1d1d; }
+  .dark .hover\:bg-red-100:hover { background-color: #552626; }
+  .dark .bg-amber-100 { background-color: #4a3b12; }
+  .dark .bg-indigo-100 { background-color: #2b2f5e; }
+  .dark .bg-pink-100 { background-color: #53223c; }
+  .dark .text-stone-700 { color: #d6d3d1; }
+  .dark .text-stone-600, .dark .text-stone-500 { color: #a8a29e; }
+  .dark .text-stone-400 { color: #78716c; }
+  .dark .text-orange-700 { color: #fdba74; }
+  .dark .text-amber-700 { color: #fcd34d; }
+  .dark .text-indigo-700 { color: #a5b4fc; }
+  .dark .text-pink-700 { color: #f9a8d4; }
+  .dark .text-emerald-700 { color: #6ee7b7; }
+  .dark .text-red-600 { color: #fca5a5; }
+  .dark .border-orange-200, .dark .border-orange-100 { border-color: #57534e; }
+  .dark input, .dark select, .dark textarea { color: #e7e5e4; }
+</style>
+</head>
+<body>
+
+<header class="sticky top-0 z-40 bg-white/90 backdrop-blur shadow-sm">
+  <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+    <h1 class="text-xl font-extrabold text-orange-600">🍜 Hôm nay ăn gì?</h1>
+    <div class="flex items-center gap-2">
+      <button id="themeBtn" class="w-10 h-10 rounded-full bg-orange-100 text-lg" title="Chế độ sáng/tối">🌙</button>
+      <button id="soundBtn" class="w-10 h-10 rounded-full bg-orange-100 text-lg" title="Bật/tắt âm thanh">🔊</button>
+      <button id="addBtn" class="px-4 h-10 rounded-full bg-emerald-500 text-white font-semibold text-sm hover:bg-emerald-600">+ Thêm món</button>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-6xl mx-auto px-4 pb-12">
+
+  <section class="mt-5 rounded-3xl bg-gradient-to-br from-orange-400 via-red-400 to-amber-300 p-5 sm:p-8 text-center shadow-xl">
+    <h2 class="text-2xl sm:text-4xl font-extrabold text-white drop-shadow">Không biết ăn gì? Để số phận quyết định!</h2>
+    <p class="text-white/90 mt-1 text-sm sm:text-base">Chọn nhóm món bên dưới, rồi bấm quay.</p>
+
+    <div id="reelBox" class="mx-auto mt-5 max-w-md rounded-2xl bg-white p-5 shadow-inner">
+      <div id="reelEmoji" class="reel-emoji text-7xl sm:text-8xl leading-none">❓</div>
+      <div id="reelName" class="mt-3 text-xl sm:text-2xl font-bold">Bấm quay để biết hôm nay ăn gì!</div>
+      <div id="reelDesc" class="mt-1 text-sm text-stone-500 min-h-[1.25rem]"></div>
+    </div>
+
+    <button id="spinBtn" class="breathe mt-5 w-full sm:w-auto px-10 py-4 rounded-full bg-gradient-to-r from-red-500 to-orange-500 text-white text-lg font-extrabold shadow-lg ring-4 ring-white/60 disabled:opacity-60 disabled:animate-none">🎲 QUAY NGAY!</button>
+  </section>
+
+  <section class="mt-6 bg-white rounded-2xl shadow-md p-4">
+    <div class="flex items-center justify-between gap-3 flex-wrap">
+      <h2 class="font-extrabold text-orange-600">🕘 Lịch sử quay</h2>
+      <label class="flex items-center gap-2 text-sm cursor-pointer select-none">
+        <input id="avoidChk" type="checkbox" class="w-4 h-4 accent-orange-500">
+        Tránh trùng 5 món gần nhất
+      </label>
+    </div>
+    <div id="histList" class="chips mt-3 flex gap-2 overflow-x-auto pb-1"></div>
+    <button id="histClear" class="mt-2 text-sm text-stone-500 underline hover:text-red-500">Xóa lịch sử</button>
+  </section>
+
+  <section class="mt-8">
+    <div class="relative">
+      <span class="absolute left-4 top-1/2 -translate-y-1/2">🔍</span>
+      <input id="search" type="search" placeholder="Tìm món ăn (gõ không dấu cũng được)…" class="w-full rounded-full border border-orange-200 bg-white pl-11 pr-4 py-3 outline-none focus:ring-2 focus:ring-orange-400">
+    </div>
+    <div id="chips" class="chips mt-3 flex gap-2 overflow-x-auto pb-1"></div>
+    <div class="mt-3 flex items-center justify-between text-sm text-stone-500">
+      <p id="count"></p>
+      <button id="resetBtn" class="underline hover:text-red-500">Khôi phục món mẫu</button>
+    </div>
+    <div id="grid" class="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"></div>
+    <div id="empty" class="hidden text-center py-12 text-stone-500 text-lg">Không tìm thấy món nào 😢</div>
+  </section>
+</main>
+
+<footer class="bg-white border-t border-orange-100">
+  <div class="max-w-6xl mx-auto px-4 py-8 text-center">
+    <h2 class="text-lg font-extrabold text-orange-600">📞 Liên hệ</h2>
+    <p class="mt-1 text-sm text-stone-500">Góp ý món ăn mới hoặc báo lỗi? Liên hệ với mình nhé!</p>
+    <div class="mt-4 flex flex-col sm:flex-row items-center justify-center gap-3">
+      <a href="mailto:tenban@example.com" class="w-full sm:w-auto px-5 py-3 rounded-full bg-orange-50 text-orange-700 font-semibold hover:bg-orange-100 transition">✉️ nguyenlion077@gmail.com</a>
+      <a href="tel:0900000000" class="w-full sm:w-auto px-5 py-3 rounded-full bg-emerald-50 text-emerald-700 font-semibold hover:bg-emerald-100 transition">📱 033 460 8959</a>
+    </div>
+    <p class="mt-5 text-xs text-stone-400">©2026 Hôm nay ăn gì?</p>
+  </div>
+</footer>
+
+<div id="toast" class="fixed left-1/2 -translate-x-1/2 bottom-6 z-[70] hidden flex items-center gap-3 px-5 py-3 rounded-full bg-stone-800 text-white text-sm shadow-lg">
+  <span id="toastMsg"></span>
+  <button id="undoBtn" class="hidden font-bold text-amber-300 underline">Hoàn tác</button>
+</div>
+
+<div id="modal" class="fixed inset-0 z-[60] hidden items-end sm:items-center justify-center bg-black/50">
+  <form id="foodForm" class="w-full max-w-md bg-white rounded-t-3xl sm:rounded-3xl p-5 shadow-2xl max-h-[92vh] overflow-y-auto" style="padding-bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px))">
+    <h3 id="modalTitle" class="text-xl font-extrabold text-orange-600"></h3>
+
+    <label class="block mt-4 text-sm font-semibold">Tên món *
+      <input id="fName" maxlength="40" required class="mt-1 w-full rounded-xl border border-orange-200 px-3 py-2 font-normal outline-none focus:ring-2 focus:ring-orange-400" placeholder="VD: Bánh xèo">
+    </label>
+
+    <label class="block mt-3 text-sm font-semibold">Emoji
+      <input id="fEmoji" maxlength="8" class="mt-1 w-full rounded-xl border border-orange-200 px-3 py-2 text-2xl font-normal outline-none focus:ring-2 focus:ring-orange-400" placeholder="🍽️">
+    </label>
+    <div id="emoPick" class="mt-2 flex flex-wrap gap-1"></div>
+
+    <label class="block mt-3 text-sm font-semibold">Bữa
+      <select id="fCat" class="mt-1 w-full rounded-xl border border-orange-200 px-3 py-2 font-normal bg-white outline-none focus:ring-2 focus:ring-orange-400">
+        <option value="sang">🌅 Sáng</option>
+        <option value="trua">☀️ Trưa</option>
+        <option value="toi">🌙 Tối</option>
+        <option value="anvat">🍿 Ăn vặt</option>
+      </select>
+    </label>
+
+    <label class="block mt-3 text-sm font-semibold">Mô tả ngắn
+      <textarea id="fDesc" rows="3" maxlength="120" class="mt-1 w-full rounded-xl border border-orange-200 px-3 py-2 font-normal outline-none focus:ring-2 focus:ring-orange-400" placeholder="Vài từ về hương vị, nguyên liệu…"></textarea>
+    </label>
+
+    <p id="fError" class="mt-2 text-sm text-red-600 min-h-[1.25rem]"></p>
+
+    <div class="mt-3 flex gap-3">
+      <button type="button" id="cancelBtn" class="flex-1 py-3 rounded-xl bg-stone-100 font-semibold">Hủy</button>
+      <button type="submit" class="flex-1 py-3 rounded-xl bg-emerald-500 text-white font-bold hover:bg-emerald-600">Lưu món</button>
+    </div>
+  </form>
+</div>
+
+<script>
+const KEY = "hom-nay-an-gi:v1";
+
+const CATS = {
+  all:   { label: "Tất cả",  icon: "🍴" },
+  sang:  { label: "Sáng",    icon: "🌅", badge: "bg-amber-100 text-amber-700",   chip: "bg-amber-400 text-white" },
+  trua:  { label: "Trưa",    icon: "☀️", badge: "bg-orange-100 text-orange-700", chip: "bg-orange-500 text-white" },
+  toi:   { label: "Tối",     icon: "🌙", badge: "bg-indigo-100 text-indigo-700", chip: "bg-indigo-500 text-white" },
+  anvat: { label: "Ăn vặt",  icon: "🍿", badge: "bg-pink-100 text-pink-700",     chip: "bg-pink-500 text-white" },
+  fav:   { label: "Yêu thích", icon: "⭐" }
+};
+
+const SEED = [
+  ["Phở bò","🍜","sang","Nước dùng ninh xương, bánh phở mềm, thịt bò tái."],
+  ["Bánh mì trứng","🥖","sang","Bánh mì giòn, trứng ốp la, pate và dưa leo."],
+  ["Xôi xéo","🍚","sang","Xôi nếp dẻo, đậu xanh, hành phi béo ngậy."],
+  ["Bún riêu cua","🦀","sang","Riêu cua, cà chua, đậu rán, rau sống."],
+  ["Cháo sườn","🥣","sang","Cháo nóng sánh mịn, sườn non, quẩy giòn."],
+  ["Bánh cuốn","🥟","sang","Bánh tráng mỏng, nhân thịt mộc nhĩ, chả và nước chấm."],
+  ["Cơm tấm sườn","🍛","trua","Sườn nướng thơm, bì, chả trứng, nước mắm chua ngọt."],
+  ["Bún chả","🍢","trua","Chả nướng than hoa, bún, rau sống, nước chấm ấm."],
+  ["Cơm gà xối mỡ","🍗","trua","Gà da giòn rụm ăn cùng cơm vàng và dưa góp."],
+  ["Mì Quảng","🍝","trua","Sợi mì vàng, tôm thịt, đậu phộng, bánh tráng nướng."],
+  ["Cơm văn phòng","🍱","trua","Đủ món mặn, canh, rau, cân bằng dinh dưỡng."],
+  ["Bún bò Huế","🌶️","trua","Nước dùng đậm đà sả ớt, giò heo, chả cua."],
+  ["Lẩu thái","🍲","toi","Nước lẩu chua cay, hải sản và rau nhúng."],
+  ["Bò nướng","🥩","toi","Thịt bò ướp sả, nướng than, cuốn bánh tráng."],
+  ["Canh chua cá","🐟","toi","Canh chua thanh mát, cá, thơm, cà chua, đậu bắp."],
+  ["Cơm gia đình","🍽️","toi","Cá kho, rau luộc, canh, bữa cơm ấm cúng."],
+  ["Pizza","🍕","toi","Đế mỏng, phô mai kéo sợi, topping tùy chọn."],
+  ["Gà nướng mật ong","🍖","toi","Da vàng óng, thịt mềm ngọt, ăn kèm khoai."],
+  ["Trà sữa","🧋","anvat","Trà thơm, sữa béo, trân châu dai giòn."],
+  ["Bánh tráng trộn","🥗","anvat","Bánh tráng, xoài, khô bò, trứng cút, rau răm."],
+  ["Khoai tây chiên","🍟","anvat","Vàng giòn, rắc muối, chấm tương ớt hoặc phô mai."],
+  ["Chè thập cẩm","🍧","anvat","Đậu, thạch, nước cốt dừa, đá bào mát lạnh."],
+  ["Bắp xào","🌽","anvat","Bắp tươi xào bơ, tép khô, hành phi."],
+  ["Kem ốc quế","🍦","anvat","Kem mát lạnh, ốc quế giòn, vị tùy chọn."]
+].map((a, i) => ({ id: "m" + String(i + 1).padStart(3, "0"), name: a[0], emoji: a[1], category: a[2], desc: a[3], favorite: false, custom: false }));
+
+let foods = load();
+let cat = "all", query = "", spinning = false, soundOn = true;
+
+function load() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) { const d = JSON.parse(raw); if (Array.isArray(d) && d.length) return d; }
+  } catch (e) {}
+  return SEED.map(f => ({ ...f }));
+}
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(foods)); return true; }
+  catch (e) { return false; }
+}
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const norm = s => String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").toLowerCase();
+
+function visible() {
+  const q = norm(query.trim());
+  return foods.filter(f =>
+    (cat === "all" || (cat === "fav" ? f.favorite : f.category === cat)) &&
+    (!q || norm(f.name + " " + f.desc).includes(q)));
+}
+
+/* ---------- Render ---------- */
+function renderChips() {
+  $("chips").innerHTML = Object.entries(CATS).map(([k, c]) => {
+    const on = k === cat;
+    const cls = on ? (c.chip || "bg-stone-800 text-white") : "bg-white text-stone-700 border border-orange-200";
+    return `<button data-cat="${k}" class="shrink-0 px-4 py-2 rounded-full text-sm font-semibold transition ${cls}">${c.icon} ${c.label}</button>`;
+  }).join("");
+}
+
+function renderGrid() {
+  const list = visible();
+  $("grid").innerHTML = list.map(f => `
+    <article data-id="${f.id}" class="card-in bg-white rounded-2xl shadow-md p-4 flex flex-col gap-2 hover:shadow-xl hover:-translate-y-0.5 transition">
+      <div class="flex items-start justify-between">
+        <span class="text-5xl leading-none">${esc(f.emoji)}</span>
+        <button data-fav="${f.id}" class="text-2xl" title="Yêu thích">${f.favorite ? "⭐" : "☆"}</button>
+      </div>
+      <h3 class="font-bold text-lg">${esc(f.name)}</h3>
+      <span class="self-start text-xs font-semibold px-2 py-1 rounded-full ${CATS[f.category].badge}">${CATS[f.category].icon} ${CATS[f.category].label}</span>
+      <p class="text-sm text-stone-600 flex-1">${esc(f.desc)}</p>
+      <div class="flex gap-2 pt-2 border-t border-orange-100">
+        <button data-edit="${f.id}" class="flex-1 py-2 rounded-lg bg-orange-50 text-orange-700 text-sm font-semibold hover:bg-orange-100">✏️ Sửa</button>
+        <button data-del="${f.id}" class="flex-1 py-2 rounded-lg bg-red-50 text-red-600 text-sm font-semibold hover:bg-red-100">🗑️ Xóa</button>
+      </div>
+    </article>`).join("");
+  $("empty").classList.toggle("hidden", list.length > 0);
+  $("count").textContent = `Hiển thị ${list.length} / ${foods.length} món`;
+}
+
+function render() { renderChips(); renderGrid(); }
+
+/* ---------- Âm thanh (Web Audio) ---------- */
+let ctx;
+function beep(freq, dur, type = "square", vol = 0.05, when = 0) {
+  if (!soundOn) return;
+  try {
+    ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime + when;
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + dur);
+  } catch (e) {}
+}
+const tick = () => beep(500 + Math.random() * 300, 0.05);
+const ding = () => { beep(784, 0.25, "sine", 0.12); beep(1047, 0.35, "sine", 0.12, 0.15); beep(1319, 0.5, "sine", 0.12, 0.3); };
+
+/* ---------- Hiệu ứng ---------- */
+function confetti() {
+  const items = ["🎉", "✨", "🍴", "🟠", "🔴", "🟡"];
+  for (let i = 0; i < 36; i++) {
+    const s = document.createElement("span");
+    s.className = "confetti";
+    s.textContent = items[i % items.length];
+    s.style.left = Math.random() * 100 + "vw";
+    s.style.fontSize = 14 + Math.random() * 18 + "px";
+    s.style.animationDelay = Math.random() * 0.4 + "s";
+    document.body.appendChild(s);
+    setTimeout(() => s.remove(), 2400);
+  }
+}
+
+let undoFn = null;
+function toast(msg, undo) {
+  $("toastMsg").textContent = msg;
+  undoFn = undo || null;
+  $("undoBtn").classList.toggle("hidden", !undo);
+  $("toast").classList.remove("hidden");
+  clearTimeout(toast.id);
+  toast.id = setTimeout(() => $("toast").classList.add("hidden"), undo ? 5000 : 2500);
+}
+$("undoBtn").addEventListener("click", () => {
+  if (undoFn) undoFn();
+  undoFn = null;
+  $("toast").classList.add("hidden");
+});
+
+/* ---------- Random ---------- */
+function spin() {
+  if (spinning) return;
+  let pool = visible();
+  if (!pool.length) return toast("Không có món nào để quay 😢");
+  if (avoid) {                                   // loại các món vừa quay gần đây
+    const recent = new Set(spinLog.slice(0, AVOID_N).map(h => h.id));
+    const fresh = pool.filter(f => !recent.has(f.id));
+    if (fresh.length) pool = fresh;
+    else toast("Đã quay hết món trong nhóm này, mở vòng mới 🔄");
+  }
+  spinning = true;
+  $("spinBtn").disabled = true;
+  $("reelBox").classList.add("spinning");
+  $("reelName").textContent = "Đang quay…";
+  $("reelDesc").textContent = "";
+
+  const result = pool[Math.floor(Math.random() * pool.length)];
+  const total = 20 + Math.floor(Math.random() * 6);
+  let i = 0, delay = 60;
+
+  (function step() {
+    if (i < total) {
+      $("reelEmoji").textContent = pool[Math.floor(Math.random() * pool.length)].emoji;
+      tick();
+      i++; delay *= 1.09;
+      setTimeout(step, delay);
+    } else {
+      finish(result);
+    }
+  })();
+}
+
+function finish(f) {
+  $("reelBox").classList.remove("spinning");
+  const e = $("reelEmoji");
+  e.textContent = f.emoji;
+  e.classList.remove("pop"); void e.offsetWidth; e.classList.add("pop");
+  $("reelName").textContent = f.name;
+  $("reelDesc").textContent = f.desc;
+  ding(); confetti();
+  const card = document.querySelector(`[data-id="${f.id}"]`);
+  if (card) { card.classList.remove("flash"); void card.offsetWidth; card.classList.add("flash"); }
+  addHistory(f);
+  $("spinBtn").disabled = false;
+  spinning = false;
+}
+
+/* ---------- Sự kiện ---------- */
+/* ---------- Chế độ tối ---------- */
+const THEME_KEY = "hom-nay-an-gi:theme";
+function applyTheme(dark) {
+  document.documentElement.classList.toggle("dark", dark);
+  $("themeBtn").textContent = dark ? "☀️" : "🌙";
+}
+applyTheme(document.documentElement.classList.contains("dark"));
+$("themeBtn").addEventListener("click", () => {
+  const dark = !document.documentElement.classList.contains("dark");
+  applyTheme(dark);
+  try { localStorage.setItem(THEME_KEY, dark ? "dark" : "light"); } catch (e) {}
+});
+
+/* ---------- Lịch sử quay + tránh trùng ---------- */
+const LOG_KEY = "hom-nay-an-gi:history:v1", AVOID_N = 5, LOG_MAX = 30;
+let spinLog = [], avoid = true;
+try {
+  const d = JSON.parse(localStorage.getItem(LOG_KEY) || "null");
+  if (d) {
+    if (Array.isArray(d.list)) spinLog = d.list;
+    if (typeof d.avoid === "boolean") avoid = d.avoid;
+  }
+} catch (e) {}
+
+function saveLog() {
+  try { localStorage.setItem(LOG_KEY, JSON.stringify({ list: spinLog, avoid })); } catch (e) {}
+}
+function fmtTime(t) {
+  const d = new Date(t);
+  const hm = d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString()
+    ? hm
+    : d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" }) + " " + hm;
+}
+function addHistory(f) {
+  spinLog.unshift({ id: f.id, name: f.name, emoji: f.emoji, t: Date.now() });
+  spinLog = spinLog.slice(0, LOG_MAX);
+  saveLog(); renderHistory();
+}
+function renderHistory() {
+  const el = $("histList");
+  if (!spinLog.length) { el.innerHTML = '<span class="text-sm text-stone-500">Chưa có lần quay nào.</span>'; return; }
+  el.innerHTML = spinLog.slice(0, 10).map((h, i) => `
+    <span class="shrink-0 rounded-full px-3 py-1.5 text-sm ${i === 0 ? "bg-amber-100 text-amber-700 font-semibold" : "bg-orange-50 text-stone-700"}">
+      ${esc(h.emoji)} ${esc(h.name)} <span class="text-xs opacity-60">${fmtTime(h.t)}</span>
+    </span>`).join("");
+}
+$("avoidChk").checked = avoid;
+$("avoidChk").addEventListener("change", e => { avoid = e.target.checked; saveLog(); });
+$("histClear").addEventListener("click", () => { spinLog = []; saveLog(); renderHistory(); toast("Đã xóa lịch sử quay"); });
+renderHistory();
+
+$("spinBtn").addEventListener("click", spin);
+$("search").addEventListener("input", e => { query = e.target.value; renderGrid(); });
+$("chips").addEventListener("click", e => {
+  const b = e.target.closest("[data-cat]"); if (!b) return;
+  cat = b.dataset.cat; render();
+});
+$("grid").addEventListener("click", e => {
+  const fav = e.target.closest("[data-fav]");
+  const edit = e.target.closest("[data-edit]");
+  const del = e.target.closest("[data-del]");
+  if (fav) {
+    const f = foods.find(x => x.id === fav.dataset.fav);
+    if (f) { f.favorite = !f.favorite; save(); renderGrid(); }
+  } else if (edit) {
+    openModal(edit.dataset.edit);
+  } else if (del) {
+    deleteFood(del.dataset.del);
+  }
+});
+$("soundBtn").addEventListener("click", () => {
+  soundOn = !soundOn; $("soundBtn").textContent = soundOn ? "🔊" : "🔇";
+});
+/* ---------- Quản lý món: thêm / sửa / xóa ---------- */
+let editingId = null;
+
+$("emoPick").innerHTML = ["🍜","🍲","🍛","🍕","🍔","🍣","🥗","🍰","🍩","☕","🧋","🍢","🥘","🍤"]
+  .map(e => `<button type="button" data-emo="${e}" class="w-9 h-9 text-xl rounded-lg bg-orange-50 hover:bg-orange-100">${e}</button>`).join("");
+$("emoPick").addEventListener("click", e => {
+  const b = e.target.closest("[data-emo]"); if (b) $("fEmoji").value = b.dataset.emo;
+});
+
+function openModal(id) {
+  editingId = id || null;
+  const f = id ? foods.find(x => x.id === id) : null;
+  $("modalTitle").textContent = f ? "✏️ Sửa món ăn" : "➕ Thêm món mới";
+  $("fName").value = f ? f.name : "";
+  $("fEmoji").value = f ? f.emoji : "";
+  $("fCat").value = f ? f.category : (CATS[cat] && CATS[cat].badge ? cat : "sang");
+  $("fDesc").value = f ? f.desc : "";
+  $("fError").textContent = "";
+  $("modal").classList.remove("hidden");
+  $("modal").classList.add("flex");
+  $("fName").focus();
+}
+function closeModal() {
+  $("modal").classList.add("hidden");
+  $("modal").classList.remove("flex");
+}
+
+function flashCard(id) {
+  const card = document.querySelector(`[data-id="${id}"]`);
+  if (!card) return;
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+  card.classList.add("flash");
+}
+
+$("foodForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const name = $("fName").value.trim();
+  const emoji = $("fEmoji").value.trim() || "🍽️";
+  const category = $("fCat").value;
+  const desc = $("fDesc").value.trim() || "Chưa có mô tả.";
+  if (!name) { $("fError").textContent = "Hãy nhập tên món."; return; }
+  if (foods.some(f => f.id !== editingId && norm(f.name) === norm(name))) {
+    $("fError").textContent = "Món này đã có trong danh sách rồi."; return;
+  }
+  let id = editingId, msg;
+  if (editingId) {
+    Object.assign(foods.find(f => f.id === editingId), { name, emoji, category, desc });
+    msg = "Đã cập nhật món ✅";
+  } else {
+    id = "c" + Date.now();
+    foods.push({ id, name, emoji, category, desc, favorite: false, custom: true });
+    msg = "Đã thêm món mới 🎉";
+  }
+  const ok = save();
+  if (!visible().some(f => f.id === id)) { cat = "all"; query = ""; $("search").value = ""; }
+  render(); closeModal();
+  flashCard(id);
+  toast(ok ? msg : "Đã lưu tạm, nhưng trình duyệt không cho ghi localStorage ⚠️");
+});
+
+function deleteFood(id) {
+  const idx = foods.findIndex(f => f.id === id);
+  if (idx < 0) return;
+  const [removed] = foods.splice(idx, 1);
+  save(); renderGrid();
+  toast(`Đã xóa “${removed.name}”`, () => {
+    foods.splice(Math.min(idx, foods.length), 0, removed);
+    save(); renderGrid(); flashCard(removed.id);
+  });
+}
+
+let resetArmed = false;
+$("resetBtn").addEventListener("click", () => {
+  const b = $("resetBtn");
+  if (!resetArmed) {
+    resetArmed = true; b.textContent = "Bấm lần nữa để xác nhận (mất món tự thêm)";
+    setTimeout(() => { resetArmed = false; b.textContent = "Khôi phục món mẫu"; }, 3500);
+    return;
+  }
+  resetArmed = false; b.textContent = "Khôi phục món mẫu";
+  foods = SEED.map(f => ({ ...f }));
+  cat = "all"; query = ""; $("search").value = "";
+  save(); render(); toast("Đã khôi phục 24 món mẫu");
+});
+
+$("addBtn").addEventListener("click", () => openModal());
+$("cancelBtn").addEventListener("click", closeModal);
+$("modal").addEventListener("click", e => { if (e.target === $("modal")) closeModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+
+render();
+</script>
+</body>
+</html>
